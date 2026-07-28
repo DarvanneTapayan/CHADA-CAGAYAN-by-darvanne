@@ -81,23 +81,30 @@ const RSS_SOURCES = [
   },
 ];
 
-// Helper: Clean HTML tags and retrieve 1-2 sentence excerpt
-function cleanSnippet(htmlOrText: string): string {
-  if (!htmlOrText) return '';
-  // Strip HTML tags
-  let cleaned = htmlOrText.replace(/<[^>]+>/g, ' ');
-  // Replace multiple spaces/newlines
-  cleaned = cleaned.replace(/\s+/g, ' ').trim();
-  // Decode HTML entities
-  cleaned = cleaned
+// Helper: Decode common HTML entities
+function decodeHtmlEntities(str: string): string {
+  if (!str) return '';
+  return str
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
     .replace(/&#039;/g, "'")
+    .replace(/&#8217;/g, "'")
+    .replace(/&#8220;/g, '"')
+    .replace(/&#8221;/g, '"')
+    .replace(/&#8211;/g, '–')
+    .replace(/&#8212;/g, '—')
     .replace(/&nbsp;/g, ' ');
+}
 
-  // Take first 2 sentences max or 220 chars
+// Helper: Clean HTML tags and retrieve 1-2 sentence excerpt for card preview
+function cleanSnippet(htmlOrText: string): string {
+  if (!htmlOrText) return '';
+  let cleaned = htmlOrText.replace(/<[^>]+>/g, ' ');
+  cleaned = cleaned.replace(/\s+/g, ' ').trim();
+  cleaned = decodeHtmlEntities(cleaned);
+
   const sentences = cleaned.match(/[^.!?]+[.!?]+/g);
   if (sentences && sentences.length >= 2) {
     cleaned = sentences.slice(0, 2).join(' ');
@@ -107,24 +114,73 @@ function cleanSnippet(htmlOrText: string): string {
   return cleaned;
 }
 
-// Helper: Extract image URL from feed item
+// Helper: Extract full article text without truncation for full reading in modal
+function cleanFullContent(htmlOrText: string): string {
+  if (!htmlOrText) return '';
+  // Convert block tags and breaks to paragraph double-newlines
+  let text = htmlOrText
+    .replace(/<\/(p|div|h1|h2|h3|h4|h5|h6|li|tr|blockquote)>/gi, '\n\n')
+    .replace(/<br\s*\/?>/gi, '\n');
+
+  // Strip all remaining HTML tags
+  text = text.replace(/<[^>]+>/g, '');
+  // Decode HTML entities
+  text = decodeHtmlEntities(text);
+  // Clean up excessive blank lines or trailing whitespace
+  text = text
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line, idx, arr) => line.length > 0 || (idx > 0 && arr[idx - 1].length > 0))
+    .join('\n');
+
+  return text.trim();
+}
+
+// Helper: Extract actual image URL from RSS feed item
 function extractImageUrl(item: any, category: string): string {
   // 1. Check enclosure
-  if (item.enclosure?.url && (item.enclosure.url.includes('.jpg') || item.enclosure.url.includes('.png') || item.enclosure.url.includes('.jpeg') || item.enclosure.url.includes('.webp'))) {
+  if (
+    item.enclosure?.url &&
+    (item.enclosure.url.includes('.jpg') ||
+      item.enclosure.url.includes('.png') ||
+      item.enclosure.url.includes('.jpeg') ||
+      item.enclosure.url.includes('.webp'))
+  ) {
     return item.enclosure.url;
   }
+
   // 2. Check media:content / media:thumbnail
   if (item.mediaContent?.$?.url) return item.mediaContent.$.url;
   if (item.mediaThumbnail?.$?.url) return item.mediaThumbnail.$.url;
+  if (item['media:content']?.$?.url) return item['media:content'].$.url;
+  if (item['media:thumbnail']?.$?.url) return item['media:thumbnail'].$.url;
 
   // 3. Regex search for <img src="..."> in HTML content
-  const htmlContent = item.contentEncoded || item['content:encoded'] || item.content || item.description || '';
-  const imgMatch = htmlContent.match(/<img[^>]+src=["']([^"']+)["']/i);
-  if (imgMatch && imgMatch[1] && !imgMatch[1].includes('gravatar') && !imgMatch[1].includes('feedburner')) {
-    return imgMatch[1];
+  const htmlContent =
+    item.contentEncoded ||
+    item['content:encoded'] ||
+    item.content ||
+    item.description ||
+    item.summary ||
+    '';
+  const imgRegex = /<img[^>]+src=["']([^"']+)["']/gi;
+  let match;
+  while ((match = imgRegex.exec(htmlContent)) !== null) {
+    const src = match[1];
+    if (
+      src &&
+      !src.includes('gravatar') &&
+      !src.includes('feedburner') &&
+      !src.includes('doubleclick') &&
+      !src.includes('1x1') &&
+      !src.includes('pixel') &&
+      (src.startsWith('http://') || src.startsWith('https://'))
+    ) {
+      return src;
+    }
   }
 
-  // 4. Default high-res thematic Unsplash image based on category
+  // 4. Default high-res thematic Unsplash image based on category if feed item has no image
   const fallbackImages: Record<string, string> = {
     mayor: 'https://images.unsplash.com/photo-1541872703-74c5e44368f9?w=800&auto=format&fit=crop&q=80',
     news: 'https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=800&auto=format&fit=crop&q=80',
@@ -272,8 +328,12 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
         if (seenUrls.has(directUrl)) continue;
 
         const itemAny = item as any;
+        const rawFullHtml = itemAny['content:encoded'] || itemAny.contentEncoded || itemAny.content || itemAny.description || itemAny.summary || '';
         const snippet = cleanSnippet(itemAny.contentSnippet || itemAny.summary || itemAny.content || itemAny.description || '');
-        const category = detectCategory(rawTitle, snippet);
+        const fullText = cleanFullContent(rawFullHtml);
+        const fullContent = fullText && fullText.length >= snippet.length ? fullText : (snippet || rawTitle);
+
+        const category = detectCategory(rawTitle, snippet + ' ' + fullText);
         const imageUrl = extractImageUrl(item, category);
         const { timestamp, timeAgo } = formatTimeAgo(item.pubDate || item.isoDate);
 
@@ -286,7 +346,7 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
           id,
           title: rawTitle,
           summary: snippet || `${rawTitle} — Read the full update from ${sourceName}.`,
-          fullContent: snippet ? `${snippet}\n\nRead the full detailed coverage directly on ${sourceName}.` : rawTitle,
+          fullContent,
           sourceName,
           sourceHandle: source.handle,
           sourceAvatar: source.avatar,

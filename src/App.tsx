@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
+  AlertTriangle,
   Bell,
   Bookmark,
   Bot,
@@ -54,6 +55,7 @@ export default function App() {
   // Fetching state
   const [isFetchingLive, setIsFetchingLive] = useState<boolean>(false);
   const [liveToast, setLiveToast] = useState<string | null>(null);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   // Saved Articles Persistence
   const [savedArticles, setSavedArticles] = useState<NewsItem[]>(() => {
@@ -132,6 +134,7 @@ export default function App() {
   // Fetch Grounded Live CDO News
   const handleFetchLiveNews = async () => {
     setIsFetchingLive(true);
+    setFetchError(null);
     setLiveToast('Synchronizing live RSS feeds (Mindanao Daily, Gold Star Daily, SunStar, PNA)...');
     try {
       const res = await fetch('/api/cdo-news', {
@@ -139,9 +142,23 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ category: activeCategory, query: searchQuery }),
       });
-      const data = await res.json();
 
-      if (data.success && Array.isArray(data.news) && data.news.length > 0) {
+      if (!res.ok) {
+        const errText = await res.text();
+        let parsedErr = errText;
+        try {
+          const json = JSON.parse(errText);
+          parsedErr = json.error || json.message || errText;
+        } catch (e) {}
+        throw new Error(`HTTP ${res.status}: ${parsedErr}`);
+      }
+
+      const data = await res.json();
+      if (!data.success) {
+        throw new Error(data.error || data.message || 'Server returned failure status');
+      }
+
+      if (Array.isArray(data.news) && data.news.length > 0) {
         const newFetched: NewsItem[] = data.news.map((item: any, idx: number) => ({
           id: item.id || `live-${Date.now()}-${idx}`,
           title: item.title || 'CDO Live News Update',
@@ -165,23 +182,8 @@ export default function App() {
           bulletPoints: item.bulletPoints || [],
         }));
 
-        setNewsItems((prev) => {
-          const existingTitles = new Set(prev.map((n) => n.title.toLowerCase().trim()));
-          const existingIds = new Set(prev.map((n) => n.id));
-
-          const filteredNew: NewsItem[] = [];
-          for (const item of newFetched) {
-            const cleanTitle = item.title.toLowerCase().trim();
-            if (!existingTitles.has(cleanTitle) && !existingIds.has(item.id)) {
-              existingTitles.add(cleanTitle);
-              existingIds.add(item.id);
-              filteredNew.push(item);
-            }
-          }
-
-          return [...filteredNew, ...prev];
-        });
-
+        setNewsItems(newFetched);
+        setFetchError(null);
         setLiveToast(`Successfully synchronized ${data.news.length} fresh CDO updates!`);
 
         // Send a push notification if browser permits
@@ -196,7 +198,9 @@ export default function App() {
       }
     } catch (err: any) {
       console.error('Error fetching live news:', err);
-      setLiveToast('Error connecting to CDO live news scanner.');
+      const errorMsg = err?.stack || err?.message || String(err);
+      setFetchError(errorMsg);
+      setLiveToast('Error fetching CDO live news stream.');
     } finally {
       setIsFetchingLive(false);
       setTimeout(() => setLiveToast(null), 4000);
@@ -340,58 +344,98 @@ export default function App() {
 
       {/* Main Content Dashboard */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6 flex-1 w-full">
-        {/* Active Search / Filter Banner if applicable */}
-        {searchQuery && (
-          <div className="mb-4 p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl flex items-center justify-between text-xs text-cyan-300 font-mono">
-            <span>
-              Search query: <strong className="text-white">"{searchQuery}"</strong> ({filteredItems.length} matches)
-            </span>
-            <button
-              onClick={() => setSearchQuery('')}
-              className="text-cyan-400 hover:text-white font-bold"
-            >
-              Clear Search
-            </button>
-          </div>
-        )}
+        {fetchError ? (
+          <div className="bg-rose-950/70 border-2 border-rose-500/80 rounded-2xl p-6 sm:p-8 space-y-4 shadow-2xl backdrop-blur-md max-w-4xl mx-auto my-6 text-left">
+            <div className="flex items-center gap-3 text-rose-400">
+              <AlertTriangle className="w-8 h-8 shrink-0 text-rose-500 animate-pulse" />
+              <div>
+                <h2 className="text-lg font-black text-rose-200 uppercase tracking-wide font-mono">
+                  News Feed Sync Error
+                </h2>
+                <p className="text-xs text-rose-300">
+                  News cards are hidden because an error was encountered while fetching the live stream.
+                </p>
+              </div>
+            </div>
 
-        {/* Feed Cards Grid / List */}
-        {filteredItems.length === 0 ? (
-          <div className="text-center py-20 bg-[#0d1117] rounded-2xl border border-white/5 p-8 space-y-4">
-            <Search className="w-12 h-12 text-slate-600 mx-auto" />
-            <h3 className="text-base font-bold text-slate-300 font-mono">No stream data matching query</h3>
-            <p className="text-xs text-slate-400 max-w-md mx-auto">
-              Try searching with different terms or click "Live CDO Scan" to fetch fresh real-time news from Cagayan de Oro web sources.
-            </p>
-            <button
-              onClick={handleFetchLiveNews}
-              disabled={isFetchingLive}
-              className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs transition-all cursor-pointer shadow-lg shadow-cyan-950"
-            >
-              <RefreshCw className={`w-4 h-4 ${isFetchingLive ? 'animate-spin' : ''}`} />
-              <span>Fetch Live CDO News Stream</span>
-            </button>
+            <div className="bg-black/80 border border-rose-900/80 rounded-xl p-4 overflow-x-auto text-xs text-rose-300 font-mono whitespace-pre-wrap leading-relaxed select-all">
+              <div className="text-[10px] text-rose-500 uppercase font-bold mb-1">Console Error Details:</div>
+              <code>{fetchError}</code>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3 pt-2">
+              <button
+                onClick={handleFetchLiveNews}
+                disabled={isFetchingLive}
+                className="flex items-center gap-2 bg-rose-600 hover:bg-rose-500 text-white font-bold px-5 py-2.5 rounded-xl text-xs transition-all cursor-pointer shadow-lg shadow-rose-950"
+              >
+                <RefreshCw className={`w-4 h-4 ${isFetchingLive ? 'animate-spin' : ''}`} />
+                <span>Retry Live Sync</span>
+              </button>
+              <button
+                onClick={() => setFetchError(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold px-4 py-2.5 rounded-xl text-xs transition-colors cursor-pointer border border-slate-700"
+              >
+                Dismiss Error
+              </button>
+            </div>
           </div>
         ) : (
-          <div
-            className={
-              viewMode === 'grid'
-                ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6'
-                : 'space-y-4 max-w-4xl mx-auto'
-            }
-          >
-            {filteredItems.map((item) => (
-              <FeedCard
-                key={item.id}
-                item={item}
-                isSaved={savedArticles.some((a) => a.id === item.id)}
-                onToggleSave={handleToggleSave}
-                onSelectArticle={(article) => setSelectedArticle(article)}
-                onFilterBySource={(sourceName) => setSourceFilter(sourceName)}
-                viewMode={viewMode}
-              />
-            ))}
-          </div>
+          <>
+            {/* Active Search / Filter Banner if applicable */}
+            {searchQuery && (
+              <div className="mb-4 p-3 bg-cyan-500/10 border border-cyan-500/30 rounded-xl flex items-center justify-between text-xs text-cyan-300 font-mono">
+                <span>
+                  Search query: <strong className="text-white">"{searchQuery}"</strong> ({filteredItems.length} matches)
+                </span>
+                <button
+                  onClick={() => setSearchQuery('')}
+                  className="text-cyan-400 hover:text-white font-bold"
+                >
+                  Clear Search
+                </button>
+              </div>
+            )}
+
+            {/* Feed Cards Grid / List */}
+            {filteredItems.length === 0 ? (
+              <div className="text-center py-20 bg-[#0d1117] rounded-2xl border border-white/5 p-8 space-y-4">
+                <Search className="w-12 h-12 text-slate-600 mx-auto" />
+                <h3 className="text-base font-bold text-slate-300 font-mono">No stream data matching query</h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Try searching with different terms or click "Live CDO Scan" to fetch fresh real-time news from Cagayan de Oro web sources.
+                </p>
+                <button
+                  onClick={handleFetchLiveNews}
+                  disabled={isFetchingLive}
+                  className="inline-flex items-center gap-2 bg-cyan-500 hover:bg-cyan-400 text-slate-950 font-bold px-4 py-2 rounded-xl text-xs transition-all cursor-pointer shadow-lg shadow-cyan-950"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isFetchingLive ? 'animate-spin' : ''}`} />
+                  <span>Fetch Live CDO News Stream</span>
+                </button>
+              </div>
+            ) : (
+              <div
+                className={
+                  viewMode === 'grid'
+                    ? 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6'
+                    : 'space-y-4 max-w-4xl mx-auto'
+                }
+              >
+                {filteredItems.map((item) => (
+                  <FeedCard
+                    key={item.id}
+                    item={item}
+                    isSaved={savedArticles.some((a) => a.id === item.id)}
+                    onToggleSave={handleToggleSave}
+                    onSelectArticle={(article) => setSelectedArticle(article)}
+                    onFilterBySource={(sourceName) => setSourceFilter(sourceName)}
+                    viewMode={viewMode}
+                  />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </main>
 

@@ -253,15 +253,10 @@ async function startServer() {
         fetchedAt: new Date().toISOString(),
       });
     } catch (error: any) {
-      console.error('[CDO Pulse API] Error in RSS endpoint, returning fallback feed:', error?.message || error);
-      res.json({
-        success: true,
-        isFallback: true,
-        news: getFallbackCDONewsItems(),
-        groundingSources: [
-          { title: 'Cagayan de Oro Official Portal', uri: 'https://cagayandeoro.gov.ph' },
-        ],
-        fetchedAt: new Date().toISOString(),
+      console.error('[CDO Pulse API] Error in RSS endpoint:', error?.stack || error?.message || error);
+      res.status(500).json({
+        success: false,
+        error: `[CDO Pulse Server Error] ${error?.message || String(error)}`,
       });
     }
   });
