@@ -208,9 +208,10 @@ async function startServer() {
   }
 
   // API Route: Live RSS Aggregator for Cagayan de Oro Local News
-  app.post('/api/cdo-news', async (req, res) => {
+  app.all('/api/cdo-news', async (req, res) => {
     try {
-      const { category = 'all', query = '' } = req.body || {};
+      const category = (req.body?.category || req.query?.category || 'all') as string;
+      const query = (req.body?.query || req.query?.query || '') as string;
 
       // 1. Parse real RSS feeds from Mindanao Daily, Gold Star Daily, Google News CDO, PNA, etc.
       let articles = await fetchAllCDORSSFeeds();
