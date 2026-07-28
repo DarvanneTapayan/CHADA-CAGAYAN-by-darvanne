@@ -182,7 +182,19 @@ export default function App() {
           bulletPoints: item.bulletPoints || [],
         }));
 
-        setNewsItems(newFetched);
+        const seenIds = new Set<string>();
+        const uniqueItems: NewsItem[] = [];
+
+        newFetched.forEach((item, idx) => {
+          let itemKey = item.id;
+          if (seenIds.has(itemKey)) {
+            itemKey = `${item.id}-${idx}`;
+          }
+          seenIds.add(itemKey);
+          uniqueItems.push({ ...item, id: itemKey });
+        });
+
+        setNewsItems(uniqueItems);
         setFetchError(null);
         setLiveToast(`Successfully synchronized ${data.news.length} fresh CDO updates!`);
 

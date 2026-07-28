@@ -1,4 +1,5 @@
 import Parser from 'rss-parser';
+import crypto from 'crypto';
 
 export interface RSSArticleItem {
   id: string;
@@ -337,10 +338,9 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
         const imageUrl = extractImageUrl(item, category);
         const { timestamp, timeAgo } = formatTimeAgo(item.pubDate || item.isoDate);
 
-        // Compute unique ID using full normalized title hash and URL hash
-        const urlHash = Buffer.from(directUrl).toString('hex').slice(-10);
-        const titleHash = Buffer.from(normalizedTitle).toString('hex').slice(-8);
-        const id = `rss-${titleHash}-${urlHash}`;
+        // Compute cryptographic unique ID using MD5 hash of direct URL and title
+        const md5Hash = crypto.createHash('md5').update(`${directUrl}||${normalizedTitle}`).digest('hex').substring(0, 16);
+        const id = `rss-${md5Hash}`;
 
         const articleItem: RSSArticleItem = {
           id,
@@ -385,14 +385,28 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
     }
   });
 
-  // Sort articles by pubDate (most recent first)
-  allArticles.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  // Second-pass deduplication to guarantee no repeated IDs or titles across parallel feeds
+  const uniqueArticles: RSSArticleItem[] = [];
+  const finalSeenIds = new Set<string>();
+  const finalSeenTitles = new Set<string>();
 
-  if (allArticles.length > 0) {
-    rssCache = allArticles;
-    lastFetchTimestamp = now;
-    console.log(`[RSS Engine] Successfully parsed & deduplicated ${allArticles.length} live articles from CDO RSS feeds.`);
+  for (const article of allArticles) {
+    const normTitle = article.title.toLowerCase().replace(/[^a-z0-9]/g, '');
+    if (!finalSeenIds.has(article.id) && !finalSeenTitles.has(normTitle)) {
+      finalSeenIds.add(article.id);
+      finalSeenTitles.add(normTitle);
+      uniqueArticles.push(article);
+    }
   }
 
-  return allArticles;
+  // Sort articles by pubDate (most recent first)
+  uniqueArticles.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+
+  if (uniqueArticles.length > 0) {
+    rssCache = uniqueArticles;
+    lastFetchTimestamp = now;
+    console.log(`[RSS Engine] Successfully parsed & deduplicated ${uniqueArticles.length} live articles from CDO RSS feeds.`);
+  }
+
+  return uniqueArticles;
 }
