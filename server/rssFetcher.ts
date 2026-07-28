@@ -107,92 +107,8 @@ function cleanSnippet(htmlOrText: string): string {
   return cleaned;
 }
 
-// Helper: Extract full article text from HTML content or feed
-function extractFullArticleText(item: any): string {
-  const rawHtml = item['content:encoded'] || item.contentEncoded || item.content || item.description || item.summary || '';
-  if (!rawHtml) return item.title || '';
-
-  // Preserve paragraph breaks and line endings
-  let text = rawHtml
-    .replace(/<br\s*[\/]?>/gi, '\n')
-    .replace(/<\/p>/gi, '\n\n')
-    .replace(/<\/div>/gi, '\n')
-    .replace(/<\/li>/gi, '\n')
-    .replace(/<[^>]+>/g, '') // strip remaining HTML tags
-    .replace(/\n\s*\n\s*\n+/g, '\n\n') // normalize multi-newlines
-    .trim();
-
-  // Decode common HTML entities
-  text = text
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#039;/g, "'")
-    .replace(/&nbsp;/g, ' ')
-    .replace(/&mdash;/g, '—')
-    .replace(/&ndash;/g, '–');
-
-  return text.length > 30 ? text : (item.title || '');
-}
-
-// Helper: Scrape full web page for full article body and actual og:image
-async function fetchFullPageContentAndImage(url: string): Promise<{ fullText?: string; ogImage?: string }> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 3500);
-
-    const res = await fetch(url, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    });
-    clearTimeout(timeoutId);
-
-    if (!res.ok) return {};
-    const html = await res.text();
-
-    // Extract og:image or twitter:image
-    let ogImage: string | undefined;
-    const ogMatch = html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
-                    html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i) ||
-                    html.match(/<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i);
-    if (ogMatch && ogMatch[1] && ogMatch[1].startsWith('http')) {
-      ogImage = ogMatch[1];
-    }
-
-    // Clean html for body text
-    const cleanHtml = html
-      .replace(/<script[\s\S]*?<\/script>/gi, '')
-      .replace(/<style[\s\S]*?<\/style>/gi, '')
-      .replace(/<header[\s\S]*?<\/header>/gi, '')
-      .replace(/<footer[\s\S]*?<\/footer>/gi, '')
-      .replace(/<nav[\s\S]*?<\/nav>/gi, '');
-
-    const pMatches = cleanHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/gi);
-    if (pMatches && pMatches.length > 0) {
-      const paragraphs = pMatches
-        .map(p => p.replace(/<[^>]+>/g, '').trim())
-        .filter(p => p.length > 40 && !p.toLowerCase().includes('cookie') && !p.toLowerCase().includes('copyright') && !p.toLowerCase().includes('all rights reserved') && !p.toLowerCase().includes('privacy policy'));
-
-      if (paragraphs.length > 0) {
-        const fullText = paragraphs.join('\n\n');
-        return { fullText, ogImage };
-      }
-    }
-    return { ogImage };
-  } catch (err) {
-    return {};
-  }
-}
-
 // Helper: Extract image URL from feed item
-function extractImageUrl(item: any, category: string, webOgImage?: string): string {
-  if (webOgImage && webOgImage.startsWith('http')) {
-    return webOgImage;
-  }
+function extractImageUrl(item: any, category: string): string {
   // 1. Check enclosure
   if (item.enclosure?.url && (item.enclosure.url.includes('.jpg') || item.enclosure.url.includes('.png') || item.enclosure.url.includes('.jpeg') || item.enclosure.url.includes('.webp'))) {
     return item.enclosure.url;
@@ -203,17 +119,9 @@ function extractImageUrl(item: any, category: string, webOgImage?: string): stri
 
   // 3. Regex search for <img src="..."> in HTML content
   const htmlContent = item.contentEncoded || item['content:encoded'] || item.content || item.description || '';
-  const imgMatches = htmlContent.match(/<img[^>]+src=["']([^"']+)["']/gi);
-  if (imgMatches) {
-    for (const imgTag of imgMatches) {
-      const srcMatch = imgTag.match(/src=["']([^"']+)["']/i);
-      if (srcMatch && srcMatch[1]) {
-        const url = srcMatch[1];
-        if (!url.includes('gravatar') && !url.includes('feedburner') && !url.includes('tracker') && !url.includes('pixel') && !url.endsWith('.gif')) {
-          return url;
-        }
-      }
-    }
+  const imgMatch = htmlContent.match(/<img[^>]+src=["']([^"']+)["']/i);
+  if (imgMatch && imgMatch[1] && !imgMatch[1].includes('gravatar') && !imgMatch[1].includes('feedburner')) {
+    return imgMatch[1];
   }
 
   // 4. Default high-res thematic Unsplash image based on category
@@ -365,9 +273,8 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
 
         const itemAny = item as any;
         const snippet = cleanSnippet(itemAny.contentSnippet || itemAny.summary || itemAny.content || itemAny.description || '');
-        let fullArticleText = extractFullArticleText(itemAny);
-        const category = detectCategory(rawTitle, snippet + ' ' + fullArticleText);
-        let imageUrl = extractImageUrl(item, category);
+        const category = detectCategory(rawTitle, snippet);
+        const imageUrl = extractImageUrl(item, category);
         const { timestamp, timeAgo } = formatTimeAgo(item.pubDate || item.isoDate);
 
         // Compute unique ID using full normalized title hash and URL hash
@@ -375,22 +282,11 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
         const titleHash = Buffer.from(normalizedTitle).toString('hex').slice(-8);
         const id = `rss-${titleHash}-${urlHash}`;
 
-        // If RSS feed provided only short text (<250 chars) or no image, attempt web page scrape
-        if ((fullArticleText.length < 250 || imageUrl.includes('unsplash.com')) && directUrl.startsWith('http')) {
-          const webData = await fetchFullPageContentAndImage(directUrl);
-          if (webData.fullText && webData.fullText.length > fullArticleText.length) {
-            fullArticleText = webData.fullText;
-          }
-          if (webData.ogImage) {
-            imageUrl = webData.ogImage;
-          }
-        }
-
         const articleItem: RSSArticleItem = {
           id,
           title: rawTitle,
           summary: snippet || `${rawTitle} — Read the full update from ${sourceName}.`,
-          fullContent: fullArticleText || snippet || rawTitle,
+          fullContent: snippet ? `${snippet}\n\nRead the full detailed coverage directly on ${sourceName}.` : rawTitle,
           sourceName,
           sourceHandle: source.handle,
           sourceAvatar: source.avatar,
@@ -408,7 +304,7 @@ export async function fetchAllCDORSSFeeds(): Promise<RSSArticleItem[]> {
           tags: ['#CDOPulse', '#CagayanDeOro', `#${sourceName.replace(/[^a-zA-Z0-9]/g, '')}`],
           isBreaking: rawTitle.toLowerCase().includes('breaking') || rawTitle.toLowerCase().includes('alert') || rawTitle.toLowerCase().includes('urgent'),
           location: 'Cagayan de Oro City',
-          bulletPoints: generateBulletPoints(rawTitle, fullArticleText || snippet),
+          bulletPoints: generateBulletPoints(rawTitle, snippet),
         };
 
         seenTitles.add(normalizedTitle);
