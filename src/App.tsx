@@ -167,7 +167,18 @@ export default function App() {
 
         setNewsItems((prev) => {
           const existingTitles = new Set(prev.map((n) => n.title.toLowerCase().trim()));
-          const filteredNew = newFetched.filter((n) => !existingTitles.has(n.title.toLowerCase().trim()));
+          const existingIds = new Set(prev.map((n) => n.id));
+
+          const filteredNew: NewsItem[] = [];
+          for (const item of newFetched) {
+            const cleanTitle = item.title.toLowerCase().trim();
+            if (!existingTitles.has(cleanTitle) && !existingIds.has(item.id)) {
+              existingTitles.add(cleanTitle);
+              existingIds.add(item.id);
+              filteredNew.push(item);
+            }
+          }
+
           return [...filteredNew, ...prev];
         });
 
