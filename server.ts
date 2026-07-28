@@ -39,31 +39,46 @@ async function startServer() {
     try {
       const { category = 'all', query = '' } = req.body || {};
       const ai = getGemini();
+      const currentDateStr = new Date().toISOString().split('T')[0];
 
-      const searchPrompt = `Search for the latest, real-time news, mayor advisories, police/crime updates, radio broadcasts, traffic reports, and hospital/health news in Cagayan de Oro City (CDO), Mindanao, Philippines.
+      const searchPrompt = `Search for the latest, real-time news, mayor advisories, police/crime updates, radio broadcasts, traffic reports, and hospital/health news in Cagayan de Oro City (CDO), Mindanao, Philippines for today (${currentDateStr}) or recent days in 2026.
 Category requested: "${category}". User search term: "${query}".
 
-Extract or synthesize 4 to 6 fresh, distinct, highly realistic Cagayan de Oro local news articles or advisories based on current real-world web search data.
+Search real news outlets and local Cagayan de Oro sources such as:
+- SunStar Cagayan de Oro (sunstar.com.ph)
+- Mindanao Daily News CDO (mindanaodailynews.com)
+- Gold Star Daily (goldstardailynews.com)
+- Philippine News Agency (PNA) Region 10
+- Mayor Klarex Uy / CDO City Hall Official updates (cagayandeoro.gov.ph)
+- Bombo Radyo CDO (DXIF 1188 kHz)
+- RMN CDO (DXCC 828 kHz)
+- iFM 99.1 CDO / Magnum Radio 99.9
+- Roads and Traffic Administration (RTA CDO)
+- Northern Mindanao Medical Center (NMMC)
 
-Return ONLY a JSON array of news objects matching this JSON schema:
+Extract 6 to 8 fresh, distinct, authentic Cagayan de Oro local news articles or advisories based on current real-world web search data for 2026.
+
+All items must have realistic recent dates/times (e.g., within hours or today).
+
+Return ONLY a JSON array of news objects with no wrapping text outside the JSON array:
 [
   {
     "id": "cdo-live-1",
     "title": "Headline string",
     "summary": "Short 2-sentence summary",
-    "fullContent": "Full article paragraph text with local CDO details, barangays, streets, or official names.",
-    "sourceName": "Name of official CDO source (e.g. Mayor Klarex Uy, Bombo Radyo CDO, SunStar CDO, NMMC, RTA, COCPO, Gold Star Daily)",
+    "fullContent": "Full article paragraph text with specific local CDO details, barangays (e.g. Carmen, Lapasan, Bulua, Kauswagan, Lumbia, Divisoria, Bugo, Tablon), streets, or official names.",
+    "sourceName": "Name of official CDO source",
     "sourceHandle": "@handle",
     "sourceAvatar": "https://images.unsplash.com/photo-1577495508048-b635879837f1?w=120&auto=format&fit=crop&q=80",
     "category": "one of: mayor, news, radio, crime, hospitals, traffic, events",
-    "timestamp": "ISO date string",
-    "timeAgo": "e.g. 15 mins ago",
+    "timestamp": "${new Date().toISOString()}",
+    "timeAgo": "e.g. 20 mins ago",
     "url": "https://cagayandeoro.gov.ph or real source link",
     "verified": true,
     "image": "https://images.unsplash.com/photo-1541872703-74c5e44368f9?w=800&auto=format&fit=crop&q=80",
     "engagement": { "likes": 340, "shares": 112, "comments": 28 },
     "tags": ["#CDOPulse", "#CagayanDeOro"],
-    "isBreaking": true or false,
+    "isBreaking": false,
     "location": "Barangay or landmark in CDO",
     "bulletPoints": ["Key takeaway 1", "Key takeaway 2", "Key takeaway 3"]
   }
@@ -74,8 +89,7 @@ Return ONLY a JSON array of news objects matching this JSON schema:
         contents: searchPrompt,
         config: {
           tools: [{ googleSearch: {} }],
-          responseMimeType: 'application/json',
-          systemInstruction: 'You are an accurate, real-time local news aggregator system for Cagayan de Oro City (CDO), Northern Mindanao, Philippines. Always ground your facts in current CDO information.',
+          systemInstruction: 'You are an accurate, real-time local news aggregator system for Cagayan de Oro City (CDO), Northern Mindanao, Philippines. Always search for real news from 2026 and format your answer strictly as a JSON array.',
         },
       });
 
@@ -84,10 +98,16 @@ Return ONLY a JSON array of news objects matching this JSON schema:
       try {
         parsedNews = JSON.parse(text);
       } catch (parseErr) {
-        console.warn('Failed to parse JSON response from Gemini, falling back', parseErr);
-        // Clean JSON text if wrapped in markdown block
-        const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-        parsedNews = JSON.parse(cleaned);
+        console.warn('Attempting robust JSON array extraction from Gemini output...');
+        const startIdx = text.indexOf('[');
+        const endIdx = text.lastIndexOf(']');
+        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
+          const jsonSub = text.substring(startIdx, endIdx + 1);
+          parsedNews = JSON.parse(jsonSub);
+        } else {
+          const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
+          parsedNews = JSON.parse(cleaned);
+        }
       }
 
       // Grounding sources

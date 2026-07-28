@@ -124,6 +124,11 @@ export default function App() {
     });
   };
 
+  // Auto-fetch fresh live CDO news on mount
+  useEffect(() => {
+    handleFetchLiveNews();
+  }, []);
+
   // Fetch Grounded Live CDO News
   const handleFetchLiveNews = async () => {
     setIsFetchingLive(true);
@@ -137,8 +142,6 @@ export default function App() {
       const data = await res.json();
 
       if (data.success && Array.isArray(data.news) && data.news.length > 0) {
-        // Merge fresh items avoiding duplicates
-        const existingIds = new Set(newsItems.map((n) => n.id));
         const newFetched: NewsItem[] = data.news.map((item: any, idx: number) => ({
           id: item.id || `live-${Date.now()}-${idx}`,
           title: item.title || 'CDO Live News Update',
@@ -163,7 +166,8 @@ export default function App() {
         }));
 
         setNewsItems((prev) => {
-          const filteredNew = newFetched.filter((n) => !existingIds.has(n.id));
+          const existingTitles = new Set(prev.map((n) => n.title.toLowerCase().trim()));
+          const filteredNew = newFetched.filter((n) => !existingTitles.has(n.title.toLowerCase().trim()));
           return [...filteredNew, ...prev];
         });
 
