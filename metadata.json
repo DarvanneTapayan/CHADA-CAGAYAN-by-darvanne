@@ -1,0 +1,6 @@
+{
+  "name": "CDO Pulse",
+  "description": "Real-time local news, Mayor updates, radio feeds, crime advisories, hospital alerts, and events for Cagayan de Oro City, Mindanao.",
+  "requestFramePermissions": ["notifications"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
