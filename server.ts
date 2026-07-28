@@ -2,6 +2,7 @@ import express from 'express';
 import path from 'path';
 import { GoogleGenAI, Type } from '@google/genai';
 import { createServer as createViteServer } from 'vite';
+import { fetchAllCDORSSFeeds } from './server/rssFetcher.js';
 
 async function startServer() {
   const app = express();
@@ -206,104 +207,59 @@ async function startServer() {
 *How can I help you with specific Cagayan de Oro news, barangay locations, or emergency services?*`;
   }
 
-  // API Route: Fetch Live Real-Time CDO News Grounded in Web Search
+  // API Route: Live RSS Aggregator for Cagayan de Oro Local News
   app.post('/api/cdo-news', async (req, res) => {
     try {
       const { category = 'all', query = '' } = req.body || {};
-      const ai = getGemini();
-      const currentDateStr = new Date().toISOString().split('T')[0];
 
-      const searchPrompt = `Search for the latest, real-time news, mayor advisories, police/crime updates, radio broadcasts, traffic reports, and hospital/health news in Cagayan de Oro City (CDO), Mindanao, Philippines for today (${currentDateStr}) or recent days in 2026.
-Category requested: "${category}". User search term: "${query}".
+      // 1. Parse real RSS feeds from Mindanao Daily, Gold Star Daily, Google News CDO, PNA, etc.
+      let articles = await fetchAllCDORSSFeeds();
 
-Search real news outlets and local Cagayan de Oro sources such as:
-- SunStar Cagayan de Oro (sunstar.com.ph)
-- Mindanao Daily News CDO (mindanaodailynews.com)
-- Gold Star Daily (goldstardailynews.com)
-- Philippine News Agency (PNA) Region 10
-- Mayor Klarex Uy / CDO City Hall Official updates (cagayandeoro.gov.ph)
-- Bombo Radyo CDO (DXIF 1188 kHz)
-- RMN CDO (DXCC 828 kHz)
-- iFM 99.1 CDO / Magnum Radio 99.9
-- Roads and Traffic Administration (RTA CDO)
-- Northern Mindanao Medical Center (NMMC)
-
-Extract 6 to 8 fresh, distinct, authentic Cagayan de Oro local news articles or advisories based on current real-world web search data for 2026.
-
-All items must have realistic recent dates/times (e.g., within hours or today).
-
-Return ONLY a JSON array of news objects with no wrapping text outside the JSON array:
-[
-  {
-    "id": "cdo-live-1",
-    "title": "Headline string",
-    "summary": "Short 2-sentence summary",
-    "fullContent": "Full article paragraph text with specific local CDO details, barangays (e.g. Carmen, Lapasan, Bulua, Kauswagan, Lumbia, Divisoria, Bugo, Tablon), streets, or official names.",
-    "sourceName": "Name of official CDO source",
-    "sourceHandle": "@handle",
-    "sourceAvatar": "https://images.unsplash.com/photo-1577495508048-b635879837f1?w=120&auto=format&fit=crop&q=80",
-    "category": "one of: mayor, news, radio, crime, hospitals, traffic, events",
-    "timestamp": "${new Date().toISOString()}",
-    "timeAgo": "e.g. 20 mins ago",
-    "url": "https://cagayandeoro.gov.ph or real source link",
-    "verified": true,
-    "image": "https://images.unsplash.com/photo-1541872703-74c5e44368f9?w=800&auto=format&fit=crop&q=80",
-    "engagement": { "likes": 340, "shares": 112, "comments": 28 },
-    "tags": ["#CDOPulse", "#CagayanDeOro"],
-    "isBreaking": false,
-    "location": "Barangay or landmark in CDO",
-    "bulletPoints": ["Key takeaway 1", "Key takeaway 2", "Key takeaway 3"]
-  }
-]`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-3.6-flash',
-        contents: searchPrompt,
-        config: {
-          tools: [{ googleSearch: {} }],
-          systemInstruction: 'You are an accurate, real-time local news aggregator system for Cagayan de Oro City (CDO), Northern Mindanao, Philippines. Always search for real news from 2026 and format your answer strictly as a JSON array.',
-        },
-      });
-
-      const text = response.text || '[]';
-      let parsedNews = [];
-      try {
-        parsedNews = JSON.parse(text);
-      } catch (parseErr) {
-        console.warn('Attempting robust JSON array extraction from Gemini output...');
-        const startIdx = text.indexOf('[');
-        const endIdx = text.lastIndexOf(']');
-        if (startIdx !== -1 && endIdx !== -1 && endIdx > startIdx) {
-          const jsonSub = text.substring(startIdx, endIdx + 1);
-          parsedNews = JSON.parse(jsonSub);
-        } else {
-          const cleaned = text.replace(/```json/g, '').replace(/```/g, '').trim();
-          parsedNews = JSON.parse(cleaned);
-        }
+      // Fallback to structured fallback items if RSS returns empty (e.g., container network block)
+      if (!articles || articles.length === 0) {
+        articles = getFallbackCDONewsItems();
       }
 
-      // Grounding sources
-      const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
-      const sources = groundingChunks
-        .filter((c: any) => c.web?.uri)
-        .map((c: any) => ({ title: c.web.title || 'Web Source', uri: c.web.uri }));
+      // 2. Filter by Category
+      if (category && category !== 'all') {
+        articles = articles.filter((item) => item.category === category);
+      }
+
+      // 3. Filter by Search Query
+      if (query && typeof query === 'string' && query.trim().length > 0) {
+        const q = query.toLowerCase().trim();
+        articles = articles.filter((item) =>
+          item.title.toLowerCase().includes(q) ||
+          item.summary.toLowerCase().includes(q) ||
+          item.sourceName.toLowerCase().includes(q) ||
+          (item.location && item.location.toLowerCase().includes(q))
+        );
+      }
+
+      // Grounding / feed citations
+      const sources = [
+        { title: 'Mindanao Daily News Feed', uri: 'https://mindanaodailynews.com/feed/' },
+        { title: 'Mindanao Gold Star Daily Feed', uri: 'https://goldstardailynews.com/feed/' },
+        { title: 'SunStar Cagayan de Oro', uri: 'https://www.sunstar.com.ph' },
+        { title: 'Philippine News Agency (PNA)', uri: 'https://www.pna.gov.ph/rss' },
+        { title: 'Cagayan de Oro City Government Portal', uri: 'https://cagayandeoro.gov.ph' },
+      ];
 
       res.json({
         success: true,
-        news: parsedNews,
+        count: articles.length,
+        news: articles,
         groundingSources: sources,
         fetchedAt: new Date().toISOString(),
       });
     } catch (error: any) {
-      console.log('[CDO Pulse API] Live search fallback active. Serving structured CDO local news stream.');
+      console.error('[CDO Pulse API] Error in RSS endpoint, returning fallback feed:', error?.message || error);
       res.json({
         success: true,
         isFallback: true,
         news: getFallbackCDONewsItems(),
         groundingSources: [
           { title: 'Cagayan de Oro Official Portal', uri: 'https://cagayandeoro.gov.ph' },
-          { title: 'SunStar Cagayan de Oro', uri: 'https://sunstar.com.ph' },
-          { title: 'Bombo Radyo CDO 1188', uri: 'https://bomboradyo.com' },
         ],
         fetchedAt: new Date().toISOString(),
       });

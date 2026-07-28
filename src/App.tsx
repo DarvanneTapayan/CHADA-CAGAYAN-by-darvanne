@@ -132,7 +132,7 @@ export default function App() {
   // Fetch Grounded Live CDO News
   const handleFetchLiveNews = async () => {
     setIsFetchingLive(true);
-    setLiveToast('Scanning Cagayan de Oro web sources via Gemini...');
+    setLiveToast('Synchronizing live RSS feeds (Mindanao Daily, Gold Star Daily, SunStar, PNA)...');
     try {
       const res = await fetch('/api/cdo-news', {
         method: 'POST',
